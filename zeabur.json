@@ -1,0 +1,10 @@
+{
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "start": "python app.py",
+  "port": 5000,
+  "healthCheck": {
+    "path": "/health"
+  }
+}
