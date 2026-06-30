@@ -237,9 +237,9 @@ def fetch_news_list(channel_id: str, size: int = 20) -> list:
 
 
 def fetch_news_detail(docid: str) -> dict:
-    """获取单条新闻的详细内容"""
+    """获取单条新闻的详细内容 - 进入新闻详情页抓取完整HTML和纯文本"""
     url = NEWS_DETAIL_API.format(docid=docid)
-    logger.info(f"请求新闻详情: {url}")
+    logger.info(f"进入新闻详情页抓取: {url}")
 
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -252,33 +252,78 @@ def fetch_news_detail(docid: str) -> dict:
         import json
         data = json.loads(resp.text)
     except json.JSONDecodeError:
+        logger.error(f"新闻详情JSON解析失败 ({docid})")
         return {}
 
     article = data.get(docid, {})
     if not article:
+        logger.warning(f"新闻详情中未找到 {docid} 的数据")
         return {}
 
-    # 提取图片
+    # ── 提取图片列表 ──
     img_list = article.get("img", [])
-    image_urls = [img.get("src", "") for img in img_list if img.get("src")]
+    image_urls = []
+    for img_info in img_list:
+        src = img_info.get("src", "")
+        if src:
+            image_urls.append(src)
 
-    # 处理HTML正文 - 替换图片占位符为实际图片
+    # ── 处理HTML正文 ──
     body_html = article.get("body", "")
+
+    # 1. 替换图片占位符 <!--IMG#N--> 为完整的 <img> 标签（含尺寸信息）
     for img_info in img_list:
         ref = img_info.get("ref", "")
         src = img_info.get("src", "")
+        alt = img_info.get("alt", "")
+        pixel = img_info.get("pixel", "")  # 格式: "800*571"
+
         if ref and src:
-            body_html = body_html.replace(ref, f'<img src="{src}" alt="{img_info.get("alt", "")}">')
+            # 解析尺寸
+            width_attr = ""
+            height_attr = ""
+            if pixel and "*" in pixel:
+                parts = pixel.split("*")
+                try:
+                    w, h = int(parts[0]), int(parts[1])
+                    width_attr = f' width="{w}"'
+                    height_attr = f' height="{h}"'
+                except ValueError:
+                    pass
+
+            img_tag = f'<img src="{src}" alt="{alt}"{width_attr}{height_attr} loading="lazy">'
+            body_html = body_html.replace(ref, img_tag)
+
+    # 2. 替换链接占位符 <!--linkN--> 为实际的 <a> 标签
+    link_list = article.get("link", [])
+    for link_info in link_list:
+        ref = link_info.get("ref", "")
+        href = link_info.get("href", "")
+        title = link_info.get("title", "")
+        if ref and href:
+            a_tag = f'<a href="{href}" target="_blank" rel="noopener">{title or href}</a>'
+            body_html = body_html.replace(ref, a_tag)
+
+    # 3. 替换学术词汇占位符 <!--AcademicWord#N-->
+    academic_words = article.get("academicWords", [])
+    for ac_word in academic_words:
+        ref = ac_word.get("ref", "")
+        word = ac_word.get("title", "")
+        if ref and word:
+            body_html = body_html.replace(ref, word)
+
+    # ── 提取纯文本内容 ──
+    content_text = get_text_from_html(body_html)
 
     return {
         "title": article.get("title", ""),
-        "content": get_text_from_html(body_html),
+        "content": content_text,
         "html_content": body_html,
         "image_urls": image_urls,
         "source": article.get("source", ""),
         "ptime": article.get("ptime", ""),
         "docid": docid,
-        "url": f"https://www.163.com/news/article/{docid}.html",
+        "url": article.get("shareLink", "") or f"https://www.163.com/news/article/{docid}.html",
         "digest": article.get("digest", "") or article.get("shareDigest", ""),
     }
 
